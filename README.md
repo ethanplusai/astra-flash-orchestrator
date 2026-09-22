@@ -1,5 +1,13 @@
 # Astra Flash Orchestrator
 
+**OpenCode support:** use the same planning, implementation and review workflow
+with native OpenCode agents. See [Install in OpenCode](INSTALL-IN-OPENCODE.md).
+The OpenCode adapter uses your selected primary model and an explicitly chosen
+worker model; it works with the OpenCode desktop app without a separately
+installed CLI. The guide includes file-only setup without Python. It does not
+require Codex Router. The Codex instructions and
+benchmark results below remain specific to the original Codex workflow.
+
 **Save Astra for the decisions that need it. Let DeepSeek V4.1 Flash do the volume.**
 
 ![Astra Flash Orchestrator measured efficiency](docs/assets/astra-savings-v2.svg)

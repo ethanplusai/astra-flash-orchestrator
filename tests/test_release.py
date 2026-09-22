@@ -9,6 +9,12 @@ spec.loader.exec_module(release)
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_opencode_adapter_is_in_distribution(self):
+        names = {p.relative_to(release.ROOT).as_posix() for p in release.selected()}
+        self.assertTrue({'install_opencode.py', 'INSTALL-IN-OPENCODE.md',
+                         'opencode/agents/astra-flash-orchestrator.md',
+                         'opencode/agents/astra_flash_builder.md'}.issubset(names))
+
     def test_private_and_backup_files_are_excluded(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

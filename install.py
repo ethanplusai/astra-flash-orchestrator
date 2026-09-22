@@ -168,18 +168,26 @@ def apply_changes(changes: list[dict], codex_home: Path, input_hashes: dict[str,
 
 
 def undo(receipt: Path, home: Path, codex_home: Path, apply: bool) -> None:
+    undo_files(
+        receipt, codex_home, apply,
+        tree=home / ".agents" / "skills" / SKILL,
+        files={codex_home / "agents" / f"{ROLE}.toml", codex_home / "AGENTS.md", codex_home / "AGENTS.override.md"},
+    )
+
+
+def undo_files(receipt: Path, backup_home: Path, apply: bool, *, tree: Path | None, files: set[Path]) -> None:
+    """Restore only targets allowed by the calling host's installation layout."""
     no_symlinks(receipt)
-    if ".." in receipt.parts or not receipt.resolve().is_relative_to((codex_home / "astra-flash-install-backups").resolve()):
-        raise SetupError("The receipt must be inside this CODEX_HOME's astra-flash-install-backups folder.")
+    if ".." in receipt.parts or not receipt.resolve().is_relative_to((backup_home / "astra-flash-install-backups").resolve()):
+        raise SetupError("The receipt must be inside this configuration directory's astra-flash-install-backups folder.")
     record = json.loads(receipt.read_text())
     if record.get("format") != 1 or record.get("status") != "installed":
         raise SetupError("This receipt does not describe an installed, undoable transaction.")
-    root = home / ".agents" / "skills" / SKILL
-    fixed = {codex_home / "agents" / f"{ROLE}.toml", codex_home / "AGENTS.md", codex_home / "AGENTS.override.md"}
     pending = []
     for entry in record["files"]:
         path = Path(entry["path"])
-        if not path.is_absolute() or ".." in path.parts or (path not in fixed and not path.resolve().is_relative_to(root.resolve())):
+        in_tree = tree is not None and path.resolve().is_relative_to(tree.resolve())
+        if not path.is_absolute() or ".." in path.parts or (path not in files and not in_tree):
             raise SetupError("The receipt contains a target outside this package's installation paths.")
         current = contents(path)
         if digest(current) != entry["after_hash"]:
@@ -189,7 +197,9 @@ def undo(receipt: Path, home: Path, codex_home: Path, apply: bool) -> None:
             name = entry["before_file"]
             if Path(name).name != name:
                 raise SetupError("Invalid backup filename in receipt.")
-            before = (receipt.parent / name).read_bytes()
+            before = contents(receipt.parent / name)
+            if before is None:
+                raise SetupError("A backup is missing. Nothing was restored.")
         if digest(before) != entry["before_hash"]:
             raise SetupError("A backup no longer matches its receipt. Nothing was restored.")
         pending.append((path, before, entry["mode"]))
@@ -203,14 +213,14 @@ def undo(receipt: Path, home: Path, codex_home: Path, apply: bool) -> None:
     if apply:
         record["status"] = "restored"
         atomic_write(receipt, (json.dumps(record, indent=2) + "\n").encode())
-        if root.exists():
-            for directory in sorted((p for p in root.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+        if tree is not None and tree.exists():
+            for directory in sorted((p for p in tree.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
                 try:
                     directory.rmdir()
                 except OSError:
                     pass
             try:
-                root.rmdir()
+                tree.rmdir()
             except OSError:
                 pass
     else:
