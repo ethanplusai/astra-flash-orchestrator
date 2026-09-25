@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 import install
 from local_config import (
     ROUTE, ROLE, SKILL, SUPPORTED_ROUTES, SetupError, inspect, model_entries,
-    resolve_worker_route,
+    resolve_worker_route, resolve_worker_selection, BACKEND_NATIVE,
 )
 from validate_plan import PlanError, validate
 
@@ -308,7 +308,7 @@ class SetupFixture(unittest.TestCase):
             'max_concurrent_threads_per_session = 6\n'
             'max_depth = 2\n'
             'job_max_runtime_seconds = 600\n'
-            f'[agents.{ROLE}]\n'
+            '[agents.fixture_other_role]\n'
             'description = "fixture role"\n'
         )
         self.assertEqual(self.report()['status'], 'static-ready')
@@ -416,6 +416,20 @@ class SetupFixture(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertEqual(self.config.read_bytes(), self.original_config)
 
+    def test_installed_doctor_explicit_candidate_route_skips_role_drift_check(self):
+        self.assertEqual(self.cli('--apply').returncode, 0)
+        route = 'openrouter/deepseek-v4.1-flash'
+        payload = json.loads(self.catalog.read_text())
+        alternate = dict(payload['models'][0])
+        alternate['slug'] = route
+        payload['models'].append(alternate)
+        self.catalog.write_text(json.dumps(payload))
+        doctor = subprocess.run([sys.executable, str(self.home / '.agents' / 'skills' / SKILL / 'scripts' / 'doctor.py'),
+                                 '--home', str(self.home), '--codex-home', str(self.codex),
+                                 '--worker-route', route], capture_output=True, text=True)
+        self.assertEqual(doctor.returncode, 0, doctor.stderr)
+        self.assertEqual(json.loads(doctor.stdout)['worker_model'], route)
+
     def test_local_doctor_uses_only_models_get_without_exposing_capability(self):
         import threading
         from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -457,6 +471,357 @@ class SetupFixture(unittest.TestCase):
         self.config.write_text(self.config.read_text() + '# Changed by another process\n')
         with self.assertRaises(SetupError):
             install.apply_changes(changes, self.codex, report['input_hashes'])
+
+
+class NativeSetupTests(unittest.TestCase):
+    setUp = SetupFixture.setUp
+    tearDown = SetupFixture.tearDown
+    cli = SetupFixture.cli
+    set_catalog_route = SetupFixture.set_catalog_route
+    MODEL = "fixture-openai-worker"
+
+    def setUp(self):
+        SetupFixture.setUp(self)
+        self.config.write_text(
+            self.config.read_text().replace(
+                'openai_base_url = "http://127.0.0.1:4202/_codex-router/TEST_PRIVATE_CAPABILITY/v1"\n', ''
+            )
+        )
+        self.original_config = self.config.read_bytes()
+        self.set_catalog_route(self.MODEL)
+
+    def native(self, *args):
+        return self.cli('--worker-model', self.MODEL, *args)
+
+    def test_native_install_generates_role_binding_and_preserves_config(self):
+        before = {str(p): p.read_bytes() for p in self.home.rglob('*') if p.is_file()}
+        preview = self.native()
+        self.assertEqual(preview.returncode, 0, preview.stderr)
+        self.assertEqual(before, {str(p): p.read_bytes() for p in self.home.rglob('*') if p.is_file()})
+        result = self.native('--apply')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.config.read_bytes(), self.original_config)
+        role = tomllib.loads((self.codex / 'agents' / f'{ROLE}.toml').read_text())
+        binding = json.loads((self.home / '.agents' / 'skills' / SKILL / 'routing.json').read_text())
+        self.assertEqual(role['model'], self.MODEL)
+        self.assertEqual(role['model_provider'], 'openai')
+        self.assertEqual(role['model_reasoning_effort'], 'high')
+        self.assertFalse(role['agents']['enabled'])
+        self.assertEqual(binding['backend'], BACKEND_NATIVE)
+        self.assertEqual(binding['worker_model'], self.MODEL)
+        self.assertEqual(binding['model_catalog_source'], str(self.catalog))
+        self.assertNotIn('DeepSeek', role['developer_instructions'])
+        self.assertNotIn('Router', role['developer_instructions'])
+        doctor = subprocess.run([sys.executable, str(self.home / '.agents' / 'skills' / SKILL / 'scripts' / 'doctor.py'),
+                                 '--home', str(self.home), '--codex-home', str(self.codex)],
+                                capture_output=True, text=True)
+        self.assertEqual(doctor.returncode, 0, doctor.stderr)
+        self.assertEqual(json.loads(doctor.stdout)['backend'], BACKEND_NATIVE)
+
+    def test_native_selection_and_effort_fail_closed(self):
+        cases = [
+            (('--worker-route', ROUTE), 'conflict'),
+            (('--worker-effort', 'unsupported'), 'not supported'),
+        ]
+        for extra, expected in cases:
+            with self.subTest(extra=extra):
+                result = self.native(*extra)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(expected, result.stderr)
+        self.assertEqual(self.cli('--worker-effort', 'high').returncode, 2)
+        self.assertEqual(self.cli('--worker-model', 'missing').returncode, 2)
+        self.assertFalse((self.home / '.agents').exists())
+
+    def test_native_preserves_auth_other_agents_and_root_settings(self):
+        auth = self.codex / 'auth.json'
+        auth.write_text('{"secret": "TEST_NATIVE_AUTH_SECRET"}')
+        other = self.codex / 'agents' / 'other.toml'
+        other.parent.mkdir()
+        other.write_text('model = "other-model"\n')
+        self.config.write_text(self.config.read_text() + '\n[agents]\ndefault_subagent_model = "other-model"\n')
+        original_config = self.config.read_bytes()
+        original_auth = auth.read_bytes()
+        original_other = other.read_bytes()
+        result = self.native('--apply')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.config.read_bytes(), original_config)
+        self.assertEqual(auth.read_bytes(), original_auth)
+        self.assertEqual(other.read_bytes(), original_other)
+        self.assertNotIn('TEST_NATIVE_AUTH_SECRET', result.stdout + result.stderr)
+
+    def test_native_duplicate_and_missing_default_effort(self):
+        payload = json.loads(self.catalog.read_text())
+        payload['models'].append(payload['models'][0])
+        self.catalog.write_text(json.dumps(payload))
+        self.assertIn('missing or duplicated', self.native().stderr)
+        payload['models'].pop()
+        payload['models'][0].pop('default_reasoning_level')
+        self.catalog.write_text(json.dumps(payload))
+        self.assertIn('Cannot verify a default', self.native().stderr)
+        self.assertEqual(self.native('--worker-effort', 'max').returncode, 0)
+
+    def test_recorded_export_survives_later_cache_creation(self):
+        self.config.unlink()
+        exported = self.home / 'exported.json'
+        self.catalog.rename(exported)
+        self.assertEqual(self.cli('--worker-model', self.MODEL, '--model-catalog', str(exported), '--apply').returncode, 0)
+        (self.codex / 'models_cache.json').write_text('{"models": []}')
+        result = self.cli('--replace', '--apply')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        binding = json.loads((self.home / '.agents' / 'skills' / SKILL / 'routing.json').read_text())
+        self.assertEqual(binding['model_catalog_source'], str(exported))
+
+    def test_provider_qualified_and_non_openai_entries_are_rejected(self):
+        self.set_catalog_route('openrouter/other-model')
+        self.assertIn('provider-qualified', self.cli('--worker-model', 'openrouter/other-model').stderr)
+        payload = json.loads(self.catalog.read_text())
+        payload['models'][0]['slug'] = self.MODEL
+        payload['models'][0]['provider'] = 'OpenRouter'
+        self.catalog.write_text(json.dumps(payload))
+        self.assertIn('non-OpenAI provider', self.native().stderr)
+
+    def test_native_endpoint_config_guards_and_no_policy(self):
+        original = self.config.read_text()
+        for extra in ('openai_base_url = "https://example.invalid/v1"\n',
+                      'chatgpt_base_url = "https://example.invalid/api/"\n',
+                      '[model_providers.openai]\nbase_url = "https://example.invalid/v1"\n'):
+            with self.subTest(extra=extra):
+                self.config.write_text(
+                    original + extra if extra.startswith('[model_providers.')
+                    else original.replace('[model_providers.unused]', extra + '[model_providers.unused]')
+                )
+                self.assertEqual(self.native().returncode, 2)
+        self.config.write_text(original)
+        before = self.policy.read_bytes()
+        self.assertEqual(self.native('--no-policy', '--apply').returncode, 0)
+        self.assertEqual(self.policy.read_bytes(), before)
+
+    def test_native_invalid_or_missing_model_argument(self):
+        self.assertEqual(self.cli('--worker-model').returncode, 2)
+        self.assertIn('nonempty exact model', self.cli('--worker-model', ' ').stderr)
+
+    def test_relative_export_resolves_from_invocation_directory(self):
+        self.config.unlink()
+        exported = self.home / 'exported.json'
+        self.catalog.rename(exported)
+        result = subprocess.run([sys.executable, str(ROOT / 'install.py'), '--home', str(self.home),
+                                 '--codex-home', str(self.codex), '--worker-model', self.MODEL,
+                                 '--model-catalog', 'exported.json'], cwd=self.home,
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(str(exported), result.stdout)
+
+    def test_custom_codex_home_and_no_config(self):
+        alternate = self.home / 'alternate-codex'
+        alternate.mkdir()
+        self.config.unlink()
+        exported = self.home / 'exported.json'
+        self.catalog.rename(exported)
+        result = subprocess.run([sys.executable, str(ROOT / 'install.py'), '--home', str(self.home),
+                                 '--codex-home', str(alternate), '--worker-model', self.MODEL,
+                                 '--model-catalog', str(exported), '--apply'], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((alternate / 'agents' / f'{ROLE}.toml').exists())
+        self.assertFalse((alternate / 'config.toml').exists())
+
+    def test_native_inspect_and_install_do_not_read_auth_or_call_network(self):
+        import socket
+        import urllib.request
+        auth = self.codex / 'auth.json'
+        auth.write_text('{"secret": "TEST_NATIVE_AUTH_SECRET"}')
+        original_open = Path.open
+        def watched_open(path, *args, **kwargs):
+            if path == auth:
+                raise AssertionError('credential file read')
+            return original_open(path, *args, **kwargs)
+        with patch.object(Path, 'open', watched_open), \
+             patch.object(subprocess, 'run', side_effect=AssertionError('subprocess')), \
+             patch.object(socket, 'create_connection', side_effect=AssertionError('network')), \
+             patch.object(urllib.request, 'urlopen', side_effect=AssertionError('network')):
+            report, _ = inspect(self.home, self.codex, selection={
+                'backend': BACKEND_NATIVE, 'model': self.MODEL})
+            changes = install.plan_changes(self.home, self.codex, report, True, False)
+            install.apply_changes(changes, self.codex, report['input_hashes'])
+
+    def test_native_capability_and_provider_checks(self):
+        original = self.catalog.read_text()
+        for metadata, expected in [
+            ({'multi_agent_version': 'v1'}, 'incompatible'),
+            ({'multi_agent_version': None}, 'Cannot verify'),
+            ({'supported_reasoning_levels': []}, 'Cannot verify'),
+        ]:
+            with self.subTest(metadata=metadata):
+                payload = json.loads(original)
+                payload['models'][0].update(metadata)
+                self.catalog.write_text(json.dumps(payload))
+                result = self.native()
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(expected, result.stderr)
+        self.catalog.write_text(original)
+        self.config.write_text(self.config.read_text().replace('model = "fixture-astra-root"',
+                                                          'model_provider = "custom"\nmodel = "fixture-astra-root"'))
+        self.assertIn('parent provider', self.native().stderr)
+
+    def test_native_upgrade_switch_and_guarded_undo(self):
+        first = self.native('--worker-effort', 'max', '--apply')
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(self.cli().returncode, 0)  # optionless upgrade preserves native binding
+        updated = self.cli('--replace', '--apply')
+        self.assertEqual(updated.returncode, 0, updated.stderr)
+        binding = json.loads((self.home / '.agents' / 'skills' / SKILL / 'routing.json').read_text())
+        self.assertEqual(binding['backend'], BACKEND_NATIVE)
+        self.assertEqual(binding['worker_effort'], 'max')
+        self.assertEqual(self.cli('--worker-route', ROUTE, '--replace').returncode, 2)
+        self.set_catalog_route(ROUTE)
+        self.config.write_text(self.config.read_text().replace(
+            'model_catalog_json = "catalog.json"',
+            'openai_base_url = "http://127.0.0.1:4202/v1"\nmodel_catalog_json = "catalog.json"'))
+        switch = self.cli('--worker-route', ROUTE, '--replace', '--apply')
+        self.assertEqual(switch.returncode, 0, switch.stderr)
+        self.assertEqual(json.loads((self.home / '.agents' / 'skills' / SKILL / 'routing.json').read_text())['backend'], 'router')
+        receipt = Path(switch.stdout.split('Undo receipt: ')[1].splitlines()[0])
+        self.assertEqual(self.cli('--undo', str(receipt), '--apply').returncode, 0)
+        self.assertEqual(json.loads((self.home / '.agents' / 'skills' / SKILL / 'routing.json').read_text())['backend'], BACKEND_NATIVE)
+
+    def test_native_explicit_catalog_without_config_or_router(self):
+        self.config.unlink()
+        self.catalog.rename(self.home / 'exported.json')
+        exported = self.home / 'exported.json'
+        result = self.cli('--worker-model', self.MODEL, '--model-catalog', str(exported), '--apply')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.config.exists())
+        self.assertEqual(json.loads((self.home / '.agents' / 'skills' / SKILL / 'routing.json').read_text())['model_catalog_source'],
+                         str(exported))
+
+    def test_native_cache_and_override_checks(self):
+        self.config.write_text(self.config.read_text().replace('model_catalog_json = "catalog.json"\n', ''))
+        cache = self.codex / 'models_cache.json'
+        cache.write_bytes(self.catalog.read_bytes())
+        result = self.native()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('capability snapshot', result.stdout)
+        with patch.dict('os.environ', {'OPENAI_BASE_URL': 'http://example.invalid/v1'}):
+            result = self.native()
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('endpoint override', result.stderr)
+        self.assertNotIn('example.invalid', result.stderr)
+
+    def test_native_profile_and_inline_shadowing(self):
+        profile = self.codex / 'work.config.toml'
+        profile.write_text('model = "fixture-profile-root"\n')
+        result = self.native('--profile', 'work', '--apply')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        binding = self.home / '.agents' / 'skills' / SKILL / 'routing.json'
+        self.assertEqual(json.loads(binding.read_text())['profile_inspected'], 'work')
+        self.assertEqual(self.cli('--replace').returncode, 0)
+        self.config.write_text(self.config.read_text() + f'\n[agents.{ROLE}]\ndescription = "shadow"\n')
+        self.assertIn('compete', self.cli('--replace').stderr)
+
+    def test_native_doctor_router_check_rejected(self):
+        self.assertEqual(self.native('--apply').returncode, 0)
+        doctor = subprocess.run([sys.executable, str(self.home / '.agents' / 'skills' / SKILL / 'scripts' / 'doctor.py'),
+                                 '--home', str(self.home), '--codex-home', str(self.codex),
+                                 '--check-local-router'], capture_output=True, text=True)
+        self.assertEqual(doctor.returncode, 2)
+        self.assertIn('only to Router', doctor.stderr)
+
+    def test_config_appearing_after_native_preflight_blocks_apply(self):
+        self.config.unlink()
+        report, _ = inspect(self.home, self.codex, selection={
+            'backend': BACKEND_NATIVE, 'model': self.MODEL, 'catalog': str(self.catalog)})
+        changes = install.plan_changes(self.home, self.codex, report, True, False)
+        self.config.write_text('model_provider = "custom"\n')
+        with self.assertRaisesRegex(SetupError, 'changed during inspection'):
+            install.apply_changes(changes, self.codex, report['input_hashes'])
+
+    def test_native_switch_with_stale_managed_policy_requires_policy_update(self):
+        self.assertEqual(self.native('--apply').returncode, 0)
+        old = self.policy.read_bytes()
+        self.policy.write_bytes(old.replace(b'uses the selected installed backend', b'uses an old Flash-only route'))
+        result = self.cli('--replace', '--no-policy')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('outdated managed workflow', result.stderr)
+
+    def test_legacy_binding_resolves_as_router(self):
+        binding = self.home / 'legacy-routing.json'
+        binding.write_text(json.dumps({'worker_model': ROUTE, 'worker_provider': 'DeepSeek API',
+                                       'worker_effort': 'high', 'profile_inspected': 'work'}))
+        selection = resolve_worker_selection(binding=binding)
+        self.assertEqual(selection['backend'], 'router')
+        self.assertEqual(selection['model'], ROUTE)
+        self.assertEqual(selection['profile'], 'work')
+
+    def test_policy_target_move_removes_old_managed_block(self):
+        self.assertEqual(self.native('--apply').returncode, 0)
+        override = self.codex / 'AGENTS.override.md'
+        override.write_text('New active override.\n')
+        result = self.cli('--replace', '--apply')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(install.BEGIN, self.policy.read_bytes())
+        self.assertIn(b'Preserve my unrelated notes.', self.policy.read_bytes())
+        self.assertIn(install.BEGIN, override.read_bytes())
+        self.assertTrue(override.read_text().startswith('New active override.'))
+
+    def test_legacy_deepseek_to_native_switch_and_guarded_undo(self):
+        self.set_catalog_route(ROUTE)
+        self.config.write_text(self.config.read_text().replace(
+            'model_catalog_json = "catalog.json"',
+            'openai_base_url = "http://127.0.0.1:4202/v1"\nmodel_catalog_json = "catalog.json"'))
+        self.assertEqual(self.cli('--apply').returncode, 0)
+        self.set_catalog_route(self.MODEL)
+        self.config.write_text(self.config.read_text().replace(
+            'openai_base_url = "http://127.0.0.1:4202/v1"\n', ''))
+        result = self.native('--replace', '--apply')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = Path(result.stdout.split('Undo receipt: ')[1].splitlines()[0])
+        role = self.codex / 'agents' / f'{ROLE}.toml'
+        original = role.read_bytes()
+        role.write_bytes(original + b'\n# Later edit\n')
+        self.assertEqual(self.cli('--undo', str(receipt), '--apply').returncode, 2)
+        role.write_bytes(original)
+        self.assertEqual(self.cli('--undo', str(receipt), '--apply').returncode, 0)
+        binding = json.loads((self.home / '.agents' / 'skills' / SKILL / 'routing.json').read_text())
+        self.assertEqual(binding['backend'], 'router')
+        self.assertEqual(binding['worker_model'], ROUTE)
+
+    def test_native_shared_root_guard_and_legacy_feature_warning(self):
+        self.config.write_text(self.config.read_text().replace('fixture-astra-root', ROUTE))
+        self.assertIn('root model is Flash', self.native().stderr)
+        self.config.write_text(self.config.read_text().replace(ROUTE, 'fixture-astra-root')
+                               + '\n[features]\nmulti_agent = false\n')
+        self.assertIn('features.multi_agent=false', self.native().stdout)
+
+    def test_native_doctor_rejects_role_name_drift(self):
+        self.assertEqual(self.native('--apply').returncode, 0)
+        role = self.codex / 'agents' / f'{ROLE}.toml'
+        role.write_text(role.read_text().replace(f'name = "{ROLE}"', 'name = "different"'))
+        doctor = subprocess.run([sys.executable, str(self.home / '.agents' / 'skills' / SKILL / 'scripts' / 'doctor.py'),
+                                 '--home', str(self.home), '--codex-home', str(self.codex)],
+                                capture_output=True, text=True)
+        self.assertEqual(doctor.returncode, 2)
+        self.assertIn('role name differs', doctor.stderr)
+
+    def test_read_only_symlinked_config_and_catalog_remain_accepted(self):
+        real_config = self.codex / 'real-config.toml'
+        real_catalog = self.codex / 'real-catalog.json'
+        self.config.rename(real_config)
+        self.config.symlink_to(real_config)
+        self.catalog.rename(real_catalog)
+        self.catalog.symlink_to(real_catalog)
+        result = self.native('--apply')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.config.is_symlink())
+        self.assertTrue(self.catalog.is_symlink())
+
+    def test_native_doctor_rejects_role_drift(self):
+        self.assertEqual(self.native('--apply').returncode, 0)
+        role = self.codex / 'agents' / f'{ROLE}.toml'
+        role.write_text(role.read_text().replace(f'model = "{self.MODEL}"', 'model = "other"'))
+        doctor = subprocess.run([sys.executable, str(self.home / '.agents' / 'skills' / SKILL / 'scripts' / 'doctor.py'),
+                                 '--home', str(self.home), '--codex-home', str(self.codex)],
+                                capture_output=True, text=True)
+        self.assertEqual(doctor.returncode, 2)
+        self.assertIn('differs from routing.json', doctor.stderr)
 
 
 class PolicyTests(unittest.TestCase):
