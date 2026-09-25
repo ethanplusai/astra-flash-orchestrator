@@ -1,7 +1,17 @@
 # Validation evidence
 
-Unreleased candidate based on version 1.2.0. Checked September 20, 2026 on macOS
-with Python 3.14.3.
+Native OpenAI branch checked September 25, 2026 on Linux with Python 3.12.3.
+The offline suite passed 90 tests. New synthetic cases cover native selection,
+generated role and binding, config-free installation, cache/export metadata,
+provider guards, unsupported capability/effort, profile preservation, backend
+switch and undo, doctor drift, stale policy, read-only symlink inputs, an absent-config race,
+and instrumentation that rejects credential-file reads, network calls and
+subprocess calls during native inspection and installation. DeepSeek
+route tests remain in the same suite. No installation into a real Codex home,
+authentication read, or inference request was performed.
+
+The earlier DeepSeek candidate was checked September 20, 2026 on macOS with
+Python 3.14.3. Its evidence below is historical and applies to that candidate.
 
 ## Verified
 
@@ -27,7 +37,7 @@ The preceding package revision was installed in a macOS Codex setup using an Ast
 
 ## Still unverified
 
-Actual delegated inference through the newly supported alternate providers,
+Actual delegated inference through the newly supported alternate providers or native OpenAI,
 native role loading for those routes in a fresh session, provider request
 attribution, long-running build quality and cost savings remain unverified for
 this candidate. A static report, a model catalog entry, or a worker naming itself
