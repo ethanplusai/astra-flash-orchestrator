@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add explicit native OpenAI worker model selection alongside the unchanged DeepSeek default, with separate static capability/provider checks and backend-preserving upgrades.
+- Keep the existing named role and orchestration workflow; add native role/binding generation, doctor consistency checks, synthetic regressions, and installation guidance.
 - Document desktop-only OpenCode setup, make CLI model listing optional, and
   provide file-only installation without Python or a separately installed CLI.
 

@@ -1,6 +1,6 @@
 interface:
   display_name: "Astra + Flash Orchestrator"
-  short_description: "Thin Astra orchestration; Flash builds and verifies."
-  default_prompt: "Use $astra-flash-orchestrator in its thin-root default: Astra defines the contract and accepts once; one installed Flash worker owns implementation and verification."
+  short_description: "Thin Astra orchestration; selected worker builds and verifies."
+  default_prompt: "Use $astra-flash-orchestrator in its thin-root default: Astra defines the contract and accepts once; one installed worker owns implementation and verification."
 policy:
   allow_implicit_invocation: true

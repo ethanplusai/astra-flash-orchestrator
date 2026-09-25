@@ -1,60 +1,48 @@
 # Install using Codex
 
-Give Codex the location of this repository and the prompt below. This authorization covers only installation, not a real delegated task.
+Give Codex the location of this repository and the prompt below. This
+authorization covers only installation, not a real delegated task.
 
 ```text
-Install Astra + Flash for Codex from this repository.
-
-Use worker route deepseek/deepseek-v4.1-flash unless I explicitly name another
-route documented in this repository. Do not infer or auto-select a billing provider.
+Install Astra Flash Orchestrator from this repository. Use the existing
+DeepSeek route by default. If I explicitly specify a native OpenAI model,
+preview and apply with --worker-model MODEL (and --worker-effort EFFORT if I
+specify one). If I specify another documented DeepSeek provider, use
+--worker-route ROUTE. Do not silently switch the installed backend on update.
 
 Read README.md, install.py, POLICY.md and WORKER-INSTRUCTIONS.md first.
-Inspect relevant local configuration without printing secrets, full private
-Router URLs, authentication contents or unrelated instructions.
+Inspect relevant local configuration without printing secrets, authentication
+contents, full private Router URLs, or unrelated instructions. Preserve my
+current root model and effort, config.toml, authentication, provider, permissions,
+unrelated agents/defaults, and instructions. Do not install Router, another
+runtime or dependencies, restart services, or quit Codex. Do not change the
+global default subagent model or effort.
 
-Preserve my current Astra root model and reasoning effort, existing Router,
-config.toml, authentication, permissions and unrelated instructions. Do not
-install another runtime, dependencies or Router, restart services, or quit Codex.
-Do not add, change or remove [agents].default_subagent_model or
-[agents].default_subagent_reasoning_effort. The package's named role pins its own
-worker model and catalog-supported effort.
+Use Python 3.11+ for every package command. Verify native custom-role/subagent
+support and the exact selected model in local capability metadata. For DeepSeek,
+keep Router's existing loopback and v2 catalog checks. For native OpenAI, require
+an already compatible built-in OpenAI parent provider/profile; do not edit
+config.toml to make it compatible. If local metadata is unavailable, explain how
+I can supply an offline bundled catalog through --model-catalog. Do not read
+credentials or refresh a model cache to make preflight pass.
 
-Verify Python 3.11+, native subagent/custom-role client support, and the selected
-worker route in the effective configuration/catalog. Pass it to install.py with
---worker-route when it is not the direct DeepSeek default.
-The default python3 may be older than 3.11; find an existing 3.11+ interpreter
-such as python3.12 and use it for every command here. Do not install or upgrade a
-runtime to satisfy this.
-The package supports loopback /v1 and /_codex-router/<capability>/v1 endpoints.
-If configuration is contradictory or unsupported, report the discrepancy.
-Do not silently change models/providers or bypass preflight.
-Never edit config.toml to make a preflight check pass. Report the discrepancy and
-stop. Appending a table header such as [agents] to config.toml absorbs every
-top-level key written after it and can stop Codex loading its config at all.
+Run offline tests and preview install.py. If they pass and the destinations
+match this package's documented scope, apply with install.py --apply, adding
+--replace only for a reviewed update or backend switch. I authorize installation
+of the personal skill, astra_flash_builder role, and scoped managed AGENTS block.
+Keep repository and managed policy restrictions. Use --profile and location
+overrides consistently if applicable.
 
-I will enter any provider API key myself through the Router's private local prompt.
-Do not ask me to paste a key into chat, inspect credential contents, or enter a key
-for me. Do not run subagents certify, test-model --live, a Router smoke test or any
-other paid inference command during installation. If the selected route is not
-already advertised with multi_agent_version v2, stop and report that prerequisite.
-
-Run the offline tests, then install.py for a dry run. If they pass and the
-proposed files match the documented scope, apply with install.py --apply.
-I authorize installation of the personal skill, native astra_flash_builder role,
-and scoped managed AGENTS policy exception. Retain repository restrictions,
-explicit no-delegation instructions and managed security controls.
-
-The role must pin Flash, inherit sandbox/approvals and disable nested agents.
-Do not invoke an external worker CLI. Run the static doctor after installation.
-An optional local catalog GET may fail when authentication is required; do not
-read or alter credentials to make it pass, or present it as inference evidence.
-
-Verify config/auth files and existing permissions are unchanged and unrelated
+The role must pin the selected worker model/effort, inherit host
+sandbox/approvals, and forbid nested delegation. Use native subagents, not an
+external worker CLI. Run the installed static doctor after installation.
+Verify config/auth files and existing permissions remain unchanged and unrelated
 policy content is preserved. Report installed paths, root/worker settings,
-test results, undo receipt and remaining runtime limitations.
+tests, undo receipt and runtime limitations.
 
-Do not launch workers, run paid inference, commit, push or deploy during setup.
-Explain that I should fully quit/reopen the host app and start an Astra session and invoke
-$astra-flash-orchestrator. Actual route verification belongs to the first
-separately authorized useful task, using host/router metadata.
+Do not launch a worker, run model inference, certify a route, commit, push or
+deploy during installation. Explain that I should fully quit/reopen the host app
+and start a root session invoking $astra-flash-orchestrator. Serving model
+verification belongs to a separately authorized useful task using client and
+service/router metadata; a model name in a file is only intended configuration.
 ```

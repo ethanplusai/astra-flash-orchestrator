@@ -18,7 +18,7 @@ sys.dont_write_bytecode = True
 BUNDLE = Path(__file__).resolve().parent
 SKILL_SOURCE = BUNDLE / "skill" / "astra-flash-orchestrator"
 sys.path.insert(0, str(SKILL_SOURCE / "scripts"))
-from local_config import SetupError, default_locations, inspect, resolve_worker_route, ROLE, SKILL, SUPPORTED_ROUTES
+from local_config import SetupError, default_locations, inspect, resolve_worker_selection, ROLE, SKILL, SUPPORTED_ROUTES, BACKEND_NATIVE
 
 BEGIN = b"<!-- BEGIN astra-flash-orchestrator managed policy -->"
 END = b"<!-- END astra-flash-orchestrator managed policy -->"
@@ -59,6 +59,20 @@ def managed_policy(original: bytes, block: bytes) -> bytes:
     return original + separator + block
 
 
+
+def remove_managed_policy(original: bytes) -> bytes:
+    if BEGIN not in original and END not in original:
+        return original
+    if original.count(BEGIN) != 1 or original.count(END) != 1 or original.index(END) < original.index(BEGIN):
+        raise SetupError("The managed instruction block is malformed or duplicated; reconcile it before installation.")
+    start = original.index(BEGIN)
+    end = original.index(END) + len(END)
+    if original[end:end + 2] == b"\r\n":
+        end += 2
+    elif original[end:end + 1] == b"\n":
+        end += 1
+    return original[:start] + original[end:]
+
 def atomic_write(path: Path, data: bytes, mode: int = 0o600) -> None:
     no_symlinks(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -93,27 +107,40 @@ def plan_changes(home: Path, codex_home: Path, report: dict, with_policy: bool, 
             requested[target / source.relative_to(SKILL_SOURCE)] = source.read_bytes()
     routing = {
         key: report[key]
-        for key in ("worker_model", "worker_provider", "worker_effort", "custom_agent", "profile_inspected")
+        for key in ("backend", "worker_model", "worker_provider", "worker_effort", "custom_agent", "profile_inspected")
     }
+    if report["backend"] == BACKEND_NATIVE:
+        routing["model_catalog_source"] = report["model_catalog_source"]
     requested[target / "routing.json"] = (json.dumps(routing, indent=2) + "\n").encode()
     instructions = (BUNDLE / "WORKER-INSTRUCTIONS.md").read_text(encoding="utf-8").strip()
     # JSON basic strings are valid TOML basic strings for these generated values.
     role = (
         f'name = {json.dumps(ROLE)}\n'
-        'description = "Implement an Astra-approved task bundle using the installed Flash route; never orchestrate or self-approve."\n'
+        'description = "Implement an Astra-approved task bundle using the installed worker model; never orchestrate or self-approve."\n'
         f'model = {json.dumps(report["worker_model"])}\n'
     )
+    if report["backend"] == BACKEND_NATIVE:
+        role += 'model_provider = "openai"\n'
     if report["worker_effort"]:
         role += f'model_reasoning_effort = {json.dumps(report["worker_effort"])}\n'
     role += f'developer_instructions = {json.dumps(instructions, ensure_ascii=False)}\n\n'
-    role += '# Inherit the parent sandbox/approvals. Prevent recursive subagent spawning.\n[agents]\nenabled = false\n'
+    role += '# Inherit parent sandbox/approvals. Declare no nested agents for compatible clients.\n[agents]\nenabled = false\n'
     requested[role_path] = role.encode()
     policy_path = None
+    if not with_policy:
+        for existing_policy in (codex_home / "AGENTS.md", codex_home / "AGENTS.override.md"):
+            old_policy = contents(existing_policy)
+            if old_policy and BEGIN in old_policy and managed_policy(old_policy, (BUNDLE / "POLICY.md").read_bytes()) != old_policy:
+                raise SetupError("--no-policy would leave an outdated managed workflow block; update it with the reviewed installation.")
     if with_policy:
         override = codex_home / "AGENTS.override.md"
         override_data = contents(override)
         policy_path = override if override_data and override_data.strip() else codex_home / "AGENTS.md"
         requested[policy_path] = managed_policy(contents(policy_path) or b"", (BUNDLE / "POLICY.md").read_bytes())
+        other = codex_home / ("AGENTS.md" if policy_path == override else "AGENTS.override.md")
+        other_data = contents(other)
+        if other_data and (BEGIN in other_data or END in other_data):
+            requested[other] = remove_managed_policy(other_data)
     changes = []
     for path, new in requested.items():
         old = contents(path)
@@ -125,11 +152,19 @@ def plan_changes(home: Path, codex_home: Path, report: dict, with_policy: bool, 
     return changes
 
 
-def apply_changes(changes: list[dict], codex_home: Path, input_hashes: dict[str, str]) -> Path | None:
+def apply_changes(changes: list[dict], codex_home: Path, input_hashes: dict[str, str | None]) -> Path | None:
     if not changes:
         return None
     for name, expected in input_hashes.items():
-        if digest(Path(name).read_bytes()) != expected:
+        source = Path(name)
+        if expected is None:
+            changed = source.exists() or source.is_symlink()
+        else:
+            try:
+                changed = digest(source.read_bytes()) != expected
+            except OSError:
+                changed = True
+        if changed:
             raise SetupError("The Codex configuration changed during inspection. Rerun the installer.")
     for change in changes:
         if contents(change["path"]) != change["before"]:
@@ -240,6 +275,9 @@ def main() -> int:
         choices=SUPPORTED_ROUTES,
         help="pin one reviewed DeepSeek V4.1 Flash provider route (default: existing binding, then direct DeepSeek API)",
     )
+    parser.add_argument("--worker-model", help="pin an exact native OpenAI model from local metadata")
+    parser.add_argument("--worker-effort", help="pin a supported native OpenAI reasoning effort; requires --worker-model")
+    parser.add_argument("--model-catalog", help="local exported model catalog when no configured catalog or cache exists; requires --worker-model")
     parser.add_argument("--undo", type=Path, metavar="RECEIPT", help="preview restoration from an installation receipt; combine with --apply to restore")
     args = parser.parse_args()
     try:
@@ -248,8 +286,9 @@ def main() -> int:
             undo(args.undo, home, codex_home, args.apply)
             return 0
         binding = home / ".agents" / "skills" / SKILL / "routing.json"
-        worker_route = resolve_worker_route(args.worker_route, binding)
-        report, _private_url = inspect(home, codex_home, args.profile, worker_route)
+        selection = resolve_worker_selection(args.worker_route, args.worker_model, args.worker_effort,
+                                             binding, args.model_catalog)
+        report, _private_url = inspect(home, codex_home, args.profile if args.profile is not None else selection.get("profile"), selection=selection)
         changes = plan_changes(home, codex_home, report, not args.no_policy, args.replace)
         print(json.dumps(report, indent=2))
         for change in changes:
