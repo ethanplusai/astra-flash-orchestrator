@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Document desktop-only OpenCode setup, make CLI model listing optional, and
+  provide file-only installation without Python or a separately installed CLI.
+
+- Add native OpenCode primary and builder agents, with an inherited primary
+  model, explicitly pinned worker model and no nested Task delegation.
+- Add an offline OpenCode installer with global/project destinations, preview,
+  replacement backups, idempotent updates and guarded undo. Preserve provider
+  configuration and credentials; retain the existing Codex installation path.
+- Document OpenCode model selection, native Task continuation, shared-workspace
+  ownership and the distinction between offline checks and verified inference.
+
 - Support explicit, reviewed DeepSeek V4.1 Flash routes through OpenRouter,
   opencode Go, Command Code, Nous Research and Ollama Cloud while retaining the
   direct DeepSeek API as the default. Existing alternate-route installations

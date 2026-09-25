@@ -35,6 +35,17 @@ Router. Upstream documentation and local client behavior may change independentl
 - [Superpowers subagent-driven-development](https://github.com/obra/superpowers/blob/main/skills/subagent-driven-development/SKILL.md):
   bounded implementer context, task review and broad final review.
 
+## OpenCode adaptation references
+
+- [OpenCode agents](https://opencode.ai/docs/agents/): Markdown primary/subagent
+  definitions, per-agent model selection and Task permissions.
+- [OpenCode configuration](https://opencode.ai/docs/config/): global/project
+  locations, custom configuration directories and overrides.
+- [OpenCode models](https://opencode.ai/docs/models/) and
+  [CLI](https://opencode.ai/docs/cli/): provider/model IDs and model listing.
+- [OpenCode Task source](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/tool/task.ts):
+  native invocation, task continuation and child-session model metadata.
+
 ## Provenance
 
 The package contains original workflow instructions and Python utilities. Its design was informed by a private prototype review and the public references above. Private attachments, prototype runner code, local configuration and personal review notes are not distributed. Upstream projects are referenced, not bundled or relicensed.
