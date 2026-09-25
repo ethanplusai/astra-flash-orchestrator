@@ -2,7 +2,7 @@
 
 ## Default: one native writer, no extra harness
 
-The default is one native Flash child in the current workspace for one coherent
+The default is one native child using the installed worker model in the current workspace for one coherent
 end-to-end phase bundle. Astra supplies the contract, dispatches once, waits, and
 reviews one completion report. The worker owns in-scope repository discovery,
 implementation, tests, debugging, and routine browser/visual QA. This avoids a
@@ -29,7 +29,7 @@ hard filesystem access controls: inherited host permissions remain authoritative
 
 ## Optional: two genuinely independent writers
 
-Parallelism is opt-in per plan. Use at most two Flash writers by default, and only
+Parallelism is opt-in per plan. Use at most two worker writers by default, and only
 when their dependencies are satisfied, writable scopes do not overlap, and
 separate workspaces are actually available. A separate agent thread alone does
 not satisfy workspace isolation. Shared types, dependency manifests/lockfiles,
