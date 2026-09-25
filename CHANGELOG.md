@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add explicit native OpenAI worker model selection alongside the unchanged DeepSeek default, with separate static capability/provider checks and backend-preserving upgrades.
+- Keep the existing named role and orchestration workflow; add native role/binding generation, doctor consistency checks, synthetic regressions, and installation guidance.
+
 - Support explicit, reviewed DeepSeek V4.1 Flash routes through OpenRouter,
   opencode Go, Command Code, Nous Research and Ollama Cloud while retaining the
   direct DeepSeek API as the default. Existing alternate-route installations
