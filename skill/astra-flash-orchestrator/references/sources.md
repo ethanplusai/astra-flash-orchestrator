@@ -38,3 +38,12 @@ Router. Upstream documentation and local client behavior may change independentl
 ## Provenance
 
 The package contains original workflow instructions and Python utilities. Its design was informed by a private prototype review and the public references above. Private attachments, prototype runner code, local configuration and personal review notes are not distributed. Upstream projects are referenced, not bundled or relicensed.
+
+Native OpenAI integration references:
+
+- [Codex subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents):
+  personal custom-agent files and supported role configuration.
+- [Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference):
+  model provider, endpoint, profile and local catalog settings.
+- [Codex 0.157.0 role override implementation](https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/agent/role.rs):
+  model and effort apply to child roles; provider is inherited in that release.
