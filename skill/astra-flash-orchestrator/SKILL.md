@@ -1,12 +1,13 @@
 ---
 name: astra-flash-orchestrator
-description: Plan and execute substantial multi-file builds, features, migrations, and refactors with Astra as orchestrator and DeepSeek V4.1 Flash as the native Codex implementation worker. Use for phased planning and delegated build execution, including existing Superpowers or GSD plans. Skip trivial edits and explicitly single-agent tasks. Worker children must not invoke this orchestration skill.
+description: Plan and execute substantial multi-file builds, features, migrations, and refactors with Astra as orchestrator and the installed DeepSeek or native OpenAI model as the Codex implementation worker. Use for phased planning and delegated build execution, including existing Superpowers or GSD plans. Skip trivial edits and explicitly single-agent tasks. Worker children must not invoke this orchestration skill.
 ---
 
-# Astra plans. Flash implements. Astra accepts.
+# Astra plans. The installed worker implements. Astra accepts.
 
-Use the existing Codex Router, not a second agent CLI or API client. This skill
-provides the workflow; the custom agent and router select the worker model. Do
+Use the backend recorded in routing.json. Router installations use the existing
+Codex Router; native OpenAI installations use the existing compatible Codex
+session. This skill provides the workflow; the custom agent selects the worker model. Do
 not claim routing is verified from these instructions or a worker's self-report.
 
 ## Supported orchestration workflow
@@ -17,7 +18,7 @@ more Astra-active revisions; it is not one option in a mode menu.
 
 Keep Astra focused on decisions where its judgment has the highest leverage:
 architecture, acceptance criteria, material risk, and final acceptance. After the
-contract is ready, Flash owns repository discovery needed within the brief,
+contract is ready, the worker owns repository discovery needed within the brief,
 implementation, testing, debugging, and routine browser/visual QA.
 
 For a normal phase, target this root workflow: one planning batch, one dispatch to
@@ -32,7 +33,7 @@ Read the relevant repository guidance and current request. Preserve existing
 work. Decide whether this is a direct small fix, a bounded build, or a large
 multi-phase project. Keep trivial edits with Astra; do not force delegation onto
 a typo or a simple question. For a substantial build, say what Astra will own
-and what Flash will implement. These routing decisions are not alternate modes.
+and what the installed worker will implement. These routing decisions are not alternate modes.
 
 Use the user's existing approvals and decisions. An explicit request to plan and
 build authorizes the in-scope workflow; it is not necessary to ask again after
@@ -43,10 +44,10 @@ cannot be established from the repo. When asked to plan only, do not implement.
 
 Read `routing.json` in this installed skill and `references/routing.md`. Run the
 read-only `scripts/doctor.py` with the same CODEX_HOME/profile used by the session.
-The doctor reuses the installed route binding unless an explicit reviewed route
-is supplied. Never infer a provider from whichever catalog entry happens to exist.
+The doctor reuses the installed backend and model unless an explicit selection is
+supplied. Never infer a provider from whichever catalog entry happens to exist.
 Its output is a static configuration check, not an end-to-end model test.
-Confirm the current ROOT is the user's selected GPT-6 Astra and that the native
+Confirm the current ROOT is the user's selected Astra and that the native
 `astra_flash_builder` role is available. Do not change the root model or effort.
 Inspect project/CLI/UI/managed overrides that the doctor cannot resolve.
 
@@ -68,7 +69,7 @@ non-goals, repo evidence, important alternatives, interfaces, failure behavior,
 risks, and acceptance criteria. Put stable shared contracts ahead of dependent
 implementation. Astra makes architecture, auth/security, tenancy, payments,
 secrets, and production-impacting decisions; do not hand those decisions to
-Flash under a vague "build it" prompt.
+the worker under a vague "build it" prompt.
 
 ## 4. Produce a phase plan and executable briefs
 
@@ -76,10 +77,10 @@ Default artifact home: `docs/agent-work/<feature>/`. Follow an existing project
 convention instead when one is established. Use the templates as needed.
 
 Write a dependency-ordered phase plan. Prefer one coherent end-to-end vertical
-bundle per phase when its contract is stable. Each Flash assignment has exact
+bundle per phase when its contract is stable. Each worker assignment has exact
 contracts, a bounded file scope, testable outcomes, and verification commands.
 Internal discovery, implementation, testing, debugging, and routine UI validation
-stay with Flash; Astra does not write the entire implementation in the plan. Long
+stay with the worker; Astra does not write the entire implementation in the plan. Long
 work is welcome inside a clear contract, not across unknown architecture boundaries.
 
 Separate tasks only at genuine dependency or independent acceptance boundaries,
@@ -104,7 +105,7 @@ Prefer a clean child context where the host supports it; never claim its context
 is empty if the host actually inherits history. No unnecessary full-transcript
 forking, duplicate repository investigation, or play-by-play log forwarding.
 
-Default to ONE active Flash writer in the current workspace. A native subagent
+Default to ONE active worker in the current workspace. A native subagent
 is not automatically a Git worktree or a security sandbox. Astra must not edit
 its claimed paths. Use two writers only when the plan explicitly identifies
 independent work and each has a real, verified separate workspace. See execution
@@ -130,9 +131,9 @@ Apply two review lenses in one batched Astra pass: specification compliance, the
 code quality/security. Inspect the actual diff and the worker's evidence. Perform
 targeted spot checks where evidence is missing, a failure is plausible, or the risk
 justifies independent confirmation. Do not routinely rerun the worker's complete
-test suite or repeat visual QA that has adequate artifacts. Default reviewer
-subagents would also route to Flash, so do not mistake a default child for an
-independent Astra review.
+test suite or repeat visual QA that has adequate artifacts. An unnamed
+reviewer may use unrelated global defaults and is not guaranteed to be Astra. Use the named installed role for implementation and keep final
+acceptance in the root Astra thread.
 
 Accept only after both lenses and relevant verification succeed. If corrections
 are needed, return all precise file-level findings to the same worker in one request.
