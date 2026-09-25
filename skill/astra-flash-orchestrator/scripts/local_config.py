@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only inspection of an existing Codex Router setup; no model requests."""
+"""Read-only inspection of the selected worker backend; no model requests."""
 from __future__ import annotations
 
 import hashlib
@@ -25,6 +25,9 @@ SUPPORTED_ROUTES = {
 }
 ROLE = "astra_flash_builder"
 SKILL = "astra-flash-orchestrator"
+BACKEND_ROUTER = "router"
+BACKEND_NATIVE = "native_openai"
+ENDPOINT_OVERRIDES = ("OPENAI_BASE_URL", "CODEX_OPENAI_BASE_URL", "CODEX_CHATGPT_BASE_URL")
 
 # Keys Codex reads as scalar settings directly under [agents]. Every other key
 # there is read as an agent NAME whose value must be a role table, so a scalar
@@ -119,19 +122,78 @@ def resolve_worker_route(requested: str | None = None, binding: Path | None = No
     return route
 
 
+def resolve_worker_selection(requested_route: str | None = None, requested_model: str | None = None,
+                             requested_effort: str | None = None, binding: Path | None = None,
+                             requested_catalog: str | None = None) -> dict:
+    """Resolve explicit selection or retain an installed binding; legacy means Router."""
+    if requested_route is not None and requested_model is not None:
+        raise SetupError("--worker-route and --worker-model conflict; choose one backend.")
+    if requested_effort is not None and requested_model is None:
+        raise SetupError("--worker-effort requires --worker-model; an installed effort is retained automatically.")
+    if requested_catalog is not None and requested_model is None:
+        raise SetupError("--model-catalog requires --worker-model; an installed catalog is retained automatically.")
+    if requested_route is not None:
+        return {"backend": BACKEND_ROUTER, "model": resolve_worker_route(requested_route)}
+    if requested_model is not None:
+        if not requested_model.strip() or requested_model != requested_model.strip():
+            raise SetupError("--worker-model requires a nonempty exact model identifier.")
+        return {"backend": BACKEND_NATIVE, "model": requested_model,
+                "effort": requested_effort,
+                "catalog": str(Path(requested_catalog).expanduser().absolute()) if requested_catalog else None,
+                "catalog_explicit": requested_catalog is not None}
+    if binding is None:
+        return {"backend": BACKEND_ROUTER, "model": ROUTE}
+    if any(item.is_symlink() for item in (binding, *binding.parents)):
+        raise SetupError("Refusing to read a worker selection through a symlinked routing binding.")
+    if not binding.exists():
+        return {"backend": BACKEND_ROUTER, "model": ROUTE}
+    try:
+        if binding.stat().st_size > 64_000:
+            raise SetupError("The existing routing binding is unexpectedly large; inspect it locally.")
+        payload = json.loads(binding.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError) as exc:
+        raise SetupError(f"Cannot read the existing routing binding ({type(exc).__name__}).") from None
+    if not isinstance(payload, dict) or not isinstance(payload.get("worker_model"), str):
+        raise SetupError("The existing routing binding does not name a worker model.")
+    backend = payload.get("backend", BACKEND_ROUTER)
+    if backend == BACKEND_ROUTER:
+        return {"backend": backend, "model": resolve_worker_route(payload["worker_model"]),
+                "profile": payload.get("profile_inspected")}
+    if backend != BACKEND_NATIVE:
+        raise SetupError("The existing routing binding names an unsupported backend.")
+    if payload.get("worker_provider") != "OpenAI" or not payload["worker_model"].strip():
+        raise SetupError("The existing native routing binding is incomplete.")
+    effort, catalog = payload.get("worker_effort"), payload.get("model_catalog_source")
+    if effort is not None and not isinstance(effort, str):
+        raise SetupError("The existing native worker effort is invalid.")
+    if catalog is not None and not isinstance(catalog, str):
+        raise SetupError("The existing native catalog source is invalid.")
+    return {"backend": backend, "model": payload["worker_model"], "effort": effort,
+            "catalog": catalog, "catalog_explicit": False, "profile": payload.get("profile_inspected")}
+
+
 def inspect(
     home: Path,
     codex_home: Path,
     profile: str | None = None,
     worker_route: str = ROUTE,
+    selection: dict | None = None,
 ) -> tuple[dict, str]:
     """Return a redacted static report and a PRIVATE local URL. Do not print URL."""
-    worker_route = resolve_worker_route(worker_route)
+    selection = selection or {"backend": BACKEND_ROUTER, "model": resolve_worker_route(worker_route)}
+    if selection["backend"] == BACKEND_ROUTER:
+        worker_route = resolve_worker_route(selection["model"])
     config_path = codex_home / "config.toml"
-    config = read_toml(config_path)
-    input_hashes = {str(config_path): hashlib.sha256(config_path.read_bytes()).hexdigest()}
+    if selection["backend"] == BACKEND_NATIVE and not config_path.exists():
+        config = {}
+        input_hashes = {str(config_path): None}
+    else:
+        config = read_toml(config_path)
+        input_hashes = {str(config_path): hashlib.sha256(config_path.read_bytes()).hexdigest()}
     selected = profile if profile is not None else config.get("profile")
     warnings: list[str] = []
+    if input_hashes.get(str(config_path)) is None:
+        warnings.append("No config.toml was found; the root model and effective session profile must be verified in the client.")
     if selected:
         if not isinstance(selected, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", selected):
             raise SetupError("Unsupported profile name; inspect the active profile manually.")
@@ -174,9 +236,14 @@ def inspect(
         warnings.append(
             "The global default_subagent_model is not used or changed; the installed named role pins its own worker model."
         )
+    if ROLE in agents:
+        raise SetupError("An inline [agents.astra_flash_builder] role would compete with the standalone role. Reconcile it first.")
     if config.get("model") in SUPPORTED_ROUTES:
         raise SetupError("The root model is Flash. Select Astra as root before installing this workflow.")
-
+    if config.get("features", {}).get("multi_agent") is False:
+        warnings.append("A legacy features.multi_agent=false flag exists; check whether your client honors it.")
+    if selection["backend"] == BACKEND_NATIVE:
+        return inspect_native(home, codex_home, config, input_hashes, selected, warnings, selection)
     catalog_value = config.get("model_catalog_json")
     if not isinstance(catalog_value, str) or not catalog_value:
         raise SetupError("No model_catalog_json was found. Confirm the existing Codex Router configuration.")
@@ -239,8 +306,6 @@ def inspect(
         raise SetupError("The inspected provider does not point at a recognized loopback Codex Router URL. URL withheld.")
     if not config.get("model"):
         warnings.append("No root model is set in this config; select GPT-6 Astra in the new session UI.")
-    if config.get("features", {}).get("multi_agent") is False:
-        warnings.append("A legacy features.multi_agent=false flag exists; check whether your client honors it.")
     warnings.append("Project, CLI, UI and managed-policy overrides are not resolved by this static inspection.")
     report = {
         "status": "static-ready",
@@ -248,6 +313,7 @@ def inspect(
         "inference_request_made": False,
         "root_model_observed": config.get("model"),
         "root_effort_observed": config.get("model_reasoning_effort"),
+        "backend": BACKEND_ROUTER,
         "worker_model": worker_route,
         "worker_provider": SUPPORTED_ROUTES[worker_route],
         "worker_effort": effort,
@@ -260,6 +326,93 @@ def inspect(
         "warnings": warnings,
     }
     return report, url
+
+
+
+def inspect_native(home: Path, codex_home: Path, config: dict, input_hashes: dict,
+                   selected: str | None, warnings: list[str], selection: dict) -> tuple[dict, str]:
+    """Check only local metadata and effective native-provider compatibility."""
+    if config.get("model_provider", "openai") != "openai":
+        raise SetupError("Native OpenAI requires an already active openai parent provider/profile; this client inherits the parent provider in subagents.")
+    if config.get("openai_base_url"):
+        raise SetupError("Native OpenAI requires the built-in openai endpoint; remove the custom openai_base_url in a compatible profile/session.")
+    if config.get("chatgpt_base_url") not in (None, "https://chatgpt.com/backend-api/"):
+        raise SetupError("Native OpenAI requires the built-in ChatGPT endpoint; choose a compatible profile/session.")
+    if isinstance(config.get("model_providers"), dict) and "openai" in config["model_providers"]:
+        raise SetupError("Native OpenAI cannot verify a redefined openai provider; choose a compatible profile/session.")
+    if any(os.environ.get(key) for key in ENDPOINT_OVERRIDES):
+        raise SetupError("Native OpenAI cannot verify provider identity while an endpoint override environment variable is set.")
+    model = selection["model"]
+    if "/" in model:
+        raise SetupError("A provider-qualified route is not a native OpenAI model; use --worker-route for reviewed DeepSeek routes.")
+    if not config.get("model"):
+        warnings.append("No root model is set in inspected config; verify the selected root in the active session.")
+    configured = config.get("model_catalog_json")
+    cache = codex_home / "models_cache.json"
+    supplied = selection.get("catalog")
+    if configured is not None and (not isinstance(configured, str) or not configured):
+        raise SetupError("The configured model_catalog_json is invalid; cannot verify native capabilities locally.")
+    if selection.get("catalog_explicit") and configured and Path(supplied) != resolve_path(configured, home, codex_home):
+        raise SetupError("--model-catalog cannot override the configured model_catalog_json.")
+    if selection.get("catalog_explicit") and cache.exists() and not configured and Path(supplied) != cache:
+        raise SetupError("--model-catalog cannot override the local models_cache.json.")
+    source = resolve_path(configured, home, codex_home) if configured else (
+        Path(supplied) if supplied and not selection.get("catalog_explicit") else
+        cache if cache.exists() else Path(supplied) if supplied else None)
+    if source is None:
+        raise SetupError("Cannot verify native model capabilities locally; provide a local catalog with --model-catalog.")
+    try:
+        if source.stat().st_size > 20_000_000:
+            raise SetupError("The model catalog is unexpectedly large; inspect it manually.")
+        payload = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError) as exc:
+        raise SetupError(f"Cannot read native model metadata locally ({type(exc).__name__}).") from None
+    matches = [entry for entry in model_entries(payload) if model_id(entry) == model]
+    if len(matches) != 1:
+        raise SetupError("The selected native model is missing or duplicated in local metadata; no model was substituted.")
+    entry = matches[0]
+    advertised_provider = entry.get("model_provider", entry.get("provider"))
+    if advertised_provider is not None and advertised_provider != "openai":
+        raise SetupError("The selected catalog entry declares a non-OpenAI provider; choose a native OpenAI model.")
+    version = entry.get("multi_agent_version")
+    if version is None:
+        raise SetupError("Cannot verify native subagent capability locally: metadata omits multi_agent_version.")
+    if version != "v2":
+        raise SetupError("The selected native model is advertised as incompatible with v2 subagents.")
+    levels = entry.get("supported_reasoning_levels")
+    if not isinstance(levels, list) or not levels:
+        raise SetupError("Cannot verify supported native reasoning efforts locally: metadata is missing.")
+    supported = [x.get("effort") if isinstance(x, dict) else x for x in levels]
+    supported = [x for x in supported if isinstance(x, str) and x]
+    if not supported:
+        raise SetupError("Cannot verify supported native reasoning efforts locally: metadata is invalid.")
+    effort = selection.get("effort")
+    if effort is None:
+        effort = entry.get("default_reasoning_level")
+        if not isinstance(effort, str) or not effort:
+            raise SetupError("Cannot verify a default native reasoning effort locally; pass --worker-effort.")
+    if effort not in supported:
+        raise SetupError("The selected native reasoning effort is not supported by this model's local metadata.")
+    if source == cache:
+        warnings.append("The local models_cache.json is a capability snapshot; this check does not validate its age, account identity or current service access.")
+    else:
+        warnings.append("The local model catalog is capability metadata, not proof of account access or serving identity.")
+    warnings.append("The installed role pins an intended model/provider, but this client inherits the parent's provider; check active profile, project, UI and managed overrides.")
+    warnings.append("Runtime identity requires client-recorded child metadata and service-reported model/provider evidence.")
+    report = {
+        "status": "static-ready", "runtime_verified": False, "inference_request_made": False,
+        "backend": BACKEND_NATIVE,
+        "root_model_observed": config.get("model"),
+        "root_effort_observed": config.get("model_reasoning_effort"),
+        "worker_model": model, "worker_provider": "OpenAI", "worker_effort": effort,
+        "custom_agent": ROLE, "profile_inspected": selected,
+        "model_catalog_source": str(source),
+        "catalog_contains_worker": True, "catalog_advertises_subagent": True,
+        "loopback_router_configured": False,
+        "input_hashes": {**input_hashes, str(source): hashlib.sha256(source.read_bytes()).hexdigest()},
+        "warnings": warnings,
+    }
+    return report, ""
 
 
 def default_locations(home_arg: str | None = None, codex_home_arg: str | None = None) -> tuple[Path, Path]:
