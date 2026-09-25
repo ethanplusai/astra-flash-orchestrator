@@ -4,7 +4,7 @@ Suggested repository name: **astra-flash-orchestrator**
 
 Suggested GitHub description:
 
-> Astra plans and reviews; DeepSeek Flash builds. A native Codex workflow with phased tasks, verification, safe installation and reversible setup.
+> Astra plans and reviews; the selected DeepSeek or native OpenAI worker builds. A native Codex workflow with verification and reversible setup.
 
 Suggested topics: `codex`, `codex-skills`, `deepseek`, `ai-agents`, `developer-tools`, `agent-orchestration`.
 
