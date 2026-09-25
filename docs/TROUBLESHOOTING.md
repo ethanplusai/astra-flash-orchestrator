@@ -56,3 +56,31 @@ assistant run `subagents certify`, `test-model --live`, a smoke test or another
 paid probe to make this check pass. Decide separately whether to spend provider
 credit on certification yourself. Do not manually falsify certification records
 or claim selection proves runtime capability.
+
+## Native OpenAI model cannot be verified locally
+
+Pass an exact `--worker-model` advertised by the configured `model_catalog_json`
+or local `models_cache.json`. A missing or duplicate entry, absent v2 subagent
+metadata, or absent supported reasoning levels blocks installation without
+substituting a model. A known non-v2 entry or an unsupported `--worker-effort`
+is incompatible. If no local catalog exists, supply an offline bundled export
+with `--model-catalog PATH`; see the README. Cache/export metadata is a snapshot,
+not an account-entitlement or live serving check.
+
+## Native OpenAI parent provider is incompatible
+
+On Codex 0.157.0 the custom agent inherits the parent's provider even when its
+role file declares `model_provider = "openai"`. Native preflight therefore
+rejects a custom parent provider, custom OpenAI/ChatGPT endpoint, or endpoint
+override. Select a compatible existing built-in OpenAI profile/session; the
+installer will not edit configuration or authentication. The active project,
+UI and managed settings can still override what static inspection sees.
+
+## Installed doctor reports role drift
+
+The installed doctor compares the generated role model, effort and intended
+provider with `routing.json`. Inspect both files, then preview an update with
+`--replace`; apply only after reviewing the backup destinations. An inline
+`[agents.astra_flash_builder]` table can shadow the standalone role and must be
+reconciled separately. A successful static doctor remains intended configuration
+evidence only; serving identity needs client and service request metadata.
